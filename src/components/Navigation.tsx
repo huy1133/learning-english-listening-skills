@@ -17,7 +17,7 @@ function Navigation({ activeScreen, onChange, activeLesson }: Props) {
   return (
     <header className="topbar">
       <div>
-        <span className="label-mono">LinguFlow</span>
+        <span className="label-mono">Audnex Listen</span>
         <p className="subtitle">version 1.0</p>
       </div>
 

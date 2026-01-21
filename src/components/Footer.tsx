@@ -3,7 +3,7 @@ export default function Footer() {
     <footer className="app-footer">
       <div className="footer-content">
         <p className="footer-description">
-          LinguFlow - Personal English Listening Practice App. Practice listening skills with interactive exercises,
+          Audnex Listen - Personal English Listening Practice App. Practice listening skills with interactive exercises,
           vocabulary building, and offline lesson management.
         </p>
         <p className="footer-credit">
