@@ -1,34 +1,58 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
+import { useMemo, useState } from 'react'
 import './App.css'
+import { lessons, vocabulary } from './data'
+import Navigation from './components/Navigation'
+import Footer from './components/Footer'
+import PlayerScreen from './components/PlayerScreen'
+import LessonsScreen from './components/LessonsScreen'
+import VocabularyScreen from './components/VocabularyScreen'
+import AddLessonModal from './components/AddLessonModal'
+import type { Screen } from './types'
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [screen, setScreen] = useState<Screen>('player')
+  const [activeLessonId, setActiveLessonId] = useState<string>(lessons[0].id)
+  const [lessonSearch, setLessonSearch] = useState('')
+  const [isAddLessonOpen, setIsAddLessonOpen] = useState(false)
+  const [lessonPage, setLessonPage] = useState(1)
+  const LESSON_PAGE_SIZE = 10
+
+  const activeLesson = useMemo(
+    () => lessons.find((l) => l.id === activeLessonId) ?? lessons[0],
+    [activeLessonId],
+  )
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div className="app-shell">
+      <div className="ripple-background">
+        <div className="ripple ripple-1" />
+        <div className="ripple ripple-2" />
+        <div className="ripple ripple-3" />
+        <div className="ripple ripple-4" />
       </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+
+      <Navigation activeScreen={screen} onChange={setScreen} activeLesson={activeLesson} />
+
+      {screen === 'lesson' && (
+        <LessonsScreen
+          lessons={lessons}
+          activeLessonId={activeLessonId}
+          onSelectLesson={setActiveLessonId}
+          search={lessonSearch}
+          onSearchChange={setLessonSearch}
+          onAddLessonClick={() => setIsAddLessonOpen(true)}
+          page={lessonPage}
+          onPageChange={setLessonPage}
+          pageSize={LESSON_PAGE_SIZE}
+        />
+      )}
+      {screen === 'player' && <PlayerScreen activeLesson={activeLesson} vocabulary={vocabulary} />}
+      {screen === 'vocabulary' && <VocabularyScreen vocabulary={vocabulary} />}
+      
+      <Footer />
+
+      <AddLessonModal isOpen={isAddLessonOpen} onClose={() => setIsAddLessonOpen(false)} />
+    </div>
   )
 }
 
