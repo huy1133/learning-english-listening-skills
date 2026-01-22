@@ -1,4 +1,4 @@
-import { ref, get, DataSnapshot } from 'firebase/database'
+import { ref, get, DataSnapshot, set, remove } from 'firebase/database'
 import { db } from '../firebase'
 import type { VocabularyItem } from '../types'
 
@@ -38,3 +38,26 @@ export async function loadVocabularyFromFirebase(): Promise<VocabularyItem[]> {
   }
 }
 
+export async function addVocabularyToFirebase(vocabulary: VocabularyItem): Promise<void> {
+  try {
+    const vocabularyRef = ref(db, `vocabulary/${vocabulary.id}`)
+    await set(vocabularyRef, {
+      en: vocabulary.en,
+      vi: vocabulary.vi,
+      sourceLesson: vocabulary.sourceLesson,
+    })
+  } catch (error) {
+    console.error('Error adding vocabulary to Firebase:', error)
+    throw error
+  }
+}
+
+export async function deleteVocabularyFromFirebase(vocabularyId: string): Promise<void> {
+  try {
+    const vocabularyRef = ref(db, `vocabulary/${vocabularyId}`)
+    await remove(vocabularyRef)
+  } catch (error) {
+    console.error('Error deleting vocabulary from Firebase:', error)
+    throw error
+  }
+}

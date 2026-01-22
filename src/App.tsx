@@ -12,11 +12,12 @@ import type { Screen } from './types'
 
 function App() {
   // Load lessons only for activeLesson (used in Navigation and PlayerScreen)
-  const { lessons, refetch: refetchLessons } = useLessons()
-  const { vocabulary } = useVocabulary()
+  const { lessons, loading, error, refetch: refetchLessons } = useLessons()
+  const { vocabulary, refetch: refetchVocabulary } = useVocabulary()
   const [screen, setScreen] = useState<Screen>('player')
   const [activeLessonId, setActiveLessonId] = useState<string>('')
   const [isAddLessonOpen, setIsAddLessonOpen] = useState(false)
+  const [shouldAutoPlay, setShouldAutoPlay] = useState(false)
 
   // Set initial active lesson when lessons are loaded
   useEffect(() => {
@@ -46,15 +47,25 @@ function App() {
           activeLessonId={activeLessonId}
           onSelectLesson={(id) => {
             setActiveLessonId(id)
+            setShouldAutoPlay(true) // Auto-play when user selects lesson
             setScreen('player')
           }}
           onAddLessonClick={() => setIsAddLessonOpen(true)}
+          lessons={lessons}
+          loading={loading}
+          error={error}
         />
       )}
       {screen === 'player' && (
-        <PlayerScreen activeLesson={activeLesson} vocabulary={vocabulary} />
+        <PlayerScreen 
+          activeLesson={activeLesson} 
+          vocabulary={vocabulary}
+          onVocabularyAdded={refetchVocabulary}
+          shouldAutoPlay={shouldAutoPlay}
+          onAutoPlayComplete={() => setShouldAutoPlay(false)}
+        />
       )}
-      {screen === 'vocabulary' && <VocabularyScreen vocabulary={vocabulary} />}
+      {screen === 'vocabulary' && <VocabularyScreen vocabulary={vocabulary} onVocabularyAdded={refetchVocabulary} lessons={lessons} />}
       
       <Footer />
 
