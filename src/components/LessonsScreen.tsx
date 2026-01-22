@@ -1,28 +1,21 @@
-import type { Lesson } from '../types'
+import { useState } from 'react'
+import { useLessons } from '../hooks/useLessons'
 
 interface LessonsScreenProps {
-  lessons: Lesson[]
   activeLessonId: string
   onSelectLesson: (id: string) => void
-  search: string
-  onSearchChange: (value: string) => void
   onAddLessonClick: () => void
-  page: number
-  onPageChange: (page: number) => void
-  pageSize: number
 }
 
 export default function LessonsScreen({
-  lessons,
   activeLessonId,
   onSelectLesson,
-  search,
-  onSearchChange,
   onAddLessonClick,
-  page,
-  onPageChange,
-  pageSize,
 }: LessonsScreenProps) {
+  const { lessons, loading, error } = useLessons()
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+  const pageSize = 10
   const filteredLessons = lessons.filter(
     (l) =>
       !search.trim() ||
@@ -35,6 +28,33 @@ export default function LessonsScreen({
   const start = (safePage - 1) * pageSize
   const pagedLessons = filteredLessons.slice(start, start + pageSize)
 
+  // Show loading state
+  if (loading) {
+    return (
+      <main className="resin-stage lessons-layout">
+        <section className="lessons-shell">
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'center', 
+            alignItems: 'center', 
+            height: '50vh',
+            color: 'var(--gold)',
+            fontFamily: 'var(--font-mono)'
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ marginBottom: '1rem' }}>Loading lessons...</div>
+              {error && (
+                <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                  Using fallback data
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      </main>
+    )
+  }
+
   return (
     <main className="resin-stage lessons-layout">
       <section className="lessons-shell">
@@ -46,8 +66,8 @@ export default function LessonsScreen({
                 className="input"
                 value={search}
                 onChange={(e) => {
-                  onSearchChange(e.target.value)
-                  onPageChange(1)
+                  setSearch(e.target.value)
+                  setPage(1)
                 }}
                 placeholder="Search by title or uploader..."
               />
@@ -72,21 +92,26 @@ export default function LessonsScreen({
                 </span>
                 <p className="lesson-title">{l.content}</p>
                 <div className="difficulty-indicator" style={{ marginTop: '1rem' }}>
-                  <div className="dot active" />
-                  <div className="dot" />
-                  <div className="dot" />
+                  <div className={`dot ${l.difficulty >= 1 ? 'active' : ''}`} />
+                  <div className={`dot ${l.difficulty >= 2 ? 'active' : ''}`} />
+                  <div className={`dot ${l.difficulty >= 3 ? 'active' : ''}`} />
                   <span className="label-mono difficulty-label">
                     {Math.round(l.audio.duration)}s · {l.english.split('/*/').length} segments
                   </span>
                 </div>
               </button>
             ))}
+            {lessons.length === 0 && (
+              <div className="lesson-card compact" style={{ opacity: 0.6 }}>
+                <p className="lesson-title">No lessons found.</p>
+              </div>
+            )}
           </div>
 
           <div className="pagination">
             <button
               className="btn-secondary btn-small"
-              onClick={() => onPageChange(Math.max(1, page - 1))}
+              onClick={() => setPage(Math.max(1, page - 1))}
               disabled={page <= 1}
             >
               Prev
@@ -96,7 +121,7 @@ export default function LessonsScreen({
             </span>
             <button
               className="btn-secondary btn-small"
-              onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+              onClick={() => setPage(Math.min(totalPages, page + 1))}
               disabled={page >= totalPages}
             >
               Next

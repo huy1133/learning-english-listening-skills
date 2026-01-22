@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import './App.css'
-import { lessons, vocabulary } from './data'
+import { useLessons } from './hooks/useLessons'
+import { useVocabulary } from './hooks/useVocabulary'
 import Navigation from './components/Navigation'
 import Footer from './components/Footer'
 import PlayerScreen from './components/PlayerScreen'
@@ -10,16 +11,23 @@ import AddLessonModal from './components/AddLessonModal'
 import type { Screen } from './types'
 
 function App() {
+  // Load lessons only for activeLesson (used in Navigation and PlayerScreen)
+  const { lessons, refetch: refetchLessons } = useLessons()
+  const { vocabulary } = useVocabulary()
   const [screen, setScreen] = useState<Screen>('player')
-  const [activeLessonId, setActiveLessonId] = useState<string>(lessons[0].id)
-  const [lessonSearch, setLessonSearch] = useState('')
+  const [activeLessonId, setActiveLessonId] = useState<string>('')
   const [isAddLessonOpen, setIsAddLessonOpen] = useState(false)
-  const [lessonPage, setLessonPage] = useState(1)
-  const LESSON_PAGE_SIZE = 10
+
+  // Set initial active lesson when lessons are loaded
+  useEffect(() => {
+    if (lessons.length > 0 && !activeLessonId) {
+      setActiveLessonId(lessons[0].id)
+    }
+  }, [lessons, activeLessonId])
 
   const activeLesson = useMemo(
-    () => lessons.find((l) => l.id === activeLessonId) ?? lessons[0],
-    [activeLessonId],
+    () => lessons.find((l) => l.id === activeLessonId) ?? lessons[0] ?? null,
+    [lessons, activeLessonId],
   )
 
   return (
@@ -35,23 +43,26 @@ function App() {
 
       {screen === 'lesson' && (
         <LessonsScreen
-          lessons={lessons}
           activeLessonId={activeLessonId}
-          onSelectLesson={setActiveLessonId}
-          search={lessonSearch}
-          onSearchChange={setLessonSearch}
+          onSelectLesson={(id) => {
+            setActiveLessonId(id)
+            setScreen('player')
+          }}
           onAddLessonClick={() => setIsAddLessonOpen(true)}
-          page={lessonPage}
-          onPageChange={setLessonPage}
-          pageSize={LESSON_PAGE_SIZE}
         />
       )}
-      {screen === 'player' && <PlayerScreen activeLesson={activeLesson} vocabulary={vocabulary} />}
+      {screen === 'player' && (
+        <PlayerScreen activeLesson={activeLesson} vocabulary={vocabulary} />
+      )}
       {screen === 'vocabulary' && <VocabularyScreen vocabulary={vocabulary} />}
       
       <Footer />
 
-      <AddLessonModal isOpen={isAddLessonOpen} onClose={() => setIsAddLessonOpen(false)} />
+      <AddLessonModal 
+        isOpen={isAddLessonOpen} 
+        onClose={() => setIsAddLessonOpen(false)}
+        onImportSuccess={refetchLessons}
+      />
     </div>
   )
 }

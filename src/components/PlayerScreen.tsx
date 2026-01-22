@@ -16,19 +16,25 @@ type Picked = {
 }
 
 interface PlayerScreenProps {
-  activeLesson: Lesson
+  activeLesson: Lesson | null
   vocabulary: VocabularyItem[]
 }
 
 export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenProps) {
-  const vocabDisplay = vocabulary.filter((v) => v.sourceLesson === activeLesson.id)
-  const duration = activeLesson.audio.duration
+  const vocabDisplay = activeLesson ? vocabulary.filter((v) => v.sourceLesson === activeLesson.id) : []
+  const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
   const [transcriptMode, setTranscriptMode] = useState<TranscriptMode>('hide')
   const [picked, setPicked] = useState<Picked | null>(null)
   const [translatedVi, setTranslatedVi] = useState<string>('')
   const [isTranslating, setIsTranslating] = useState(false)
+  const [seekIndicator, setSeekIndicator] = useState<string | null>(null)
+  const [seekIndicatorKey, setSeekIndicatorKey] = useState(0)
   const translateAbortRef = useRef<AbortController | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const previousLessonIdRef = useRef<string | null>(null)
+  const seekIndicatorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -36,18 +42,191 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
+  // Initialize audio element
+  useEffect(() => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio()
+      audioRef.current.addEventListener('timeupdate', () => {
+        if (audioRef.current) {
+          setCurrentTime(audioRef.current.currentTime)
+        }
+      })
+      audioRef.current.addEventListener('loadedmetadata', () => {
+        if (audioRef.current) {
+          setDuration(audioRef.current.duration || 0)
+        }
+      })
+      audioRef.current.addEventListener('ended', () => {
+        setIsPlaying(false)
+        setCurrentTime(0)
+      })
+      audioRef.current.addEventListener('play', () => setIsPlaying(true))
+      audioRef.current.addEventListener('pause', () => setIsPlaying(false))
+    }
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
+    }
+  }, [])
+
+  // Load and auto-play when lesson changes
+  useEffect(() => {
+    if (!activeLesson || !audioRef.current) return
+
+    const lessonId = activeLesson.id
+    const audioUrl = activeLesson.audio.url
+    
+    // Only load if this is a new lesson
+    const isNewLesson = previousLessonIdRef.current !== lessonId
+    
+    if (isNewLesson) {
+      previousLessonIdRef.current = lessonId
+      
+      // Pause current audio if playing
+      if (!audioRef.current.paused) {
+        audioRef.current.pause()
+      }
+      
+      // Load new audio
+      audioRef.current.src = audioUrl
+      audioRef.current.load()
+      setCurrentTime(0)
+      
+      // Set duration from lesson data as fallback
+      if (activeLesson.audio.duration) {
+        setDuration(activeLesson.audio.duration)
+      }
+      
+      // Wait for audio to be ready before playing
+      const playAudio = () => {
+        if (audioRef.current) {
+          audioRef.current.play().catch((error) => {
+            // Ignore AbortError (interrupted play requests)
+            if (error.name !== 'AbortError') {
+              console.error('Error playing audio:', error)
+            }
+            setIsPlaying(false)
+          })
+        }
+      }
+      
+      // Try to play when audio is ready
+      if (audioRef.current.readyState >= 2) {
+        // Audio already loaded
+        playAudio()
+      } else {
+        // Wait for audio to load
+        const onCanPlay = () => {
+          playAudio()
+          audioRef.current?.removeEventListener('canplay', onCanPlay)
+        }
+        audioRef.current.addEventListener('canplay', onCanPlay)
+        
+        // Cleanup listener if component unmounts
+        return () => {
+          audioRef.current?.removeEventListener('canplay', onCanPlay)
+        }
+      }
+    } else {
+      // Same lesson, just update duration if needed
+      if (activeLesson.audio.duration && duration !== activeLesson.audio.duration) {
+        setDuration(activeLesson.audio.duration)
+      }
+    }
+  }, [activeLesson?.id, activeLesson?.audio.url])
+
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = parseFloat(e.target.value)
     setCurrentTime(newTime)
+    if (audioRef.current) {
+      audioRef.current.currentTime = newTime
+    }
   }
 
+  const handlePlayPause = () => {
+    if (!audioRef.current || !activeLesson) return
+    
+    if (isPlaying) {
+      audioRef.current.pause()
+    } else {
+      audioRef.current.play().catch((error) => {
+        // Ignore AbortError (interrupted play requests)
+        if (error.name !== 'AbortError') {
+          console.error('Error playing audio:', error)
+        }
+        setIsPlaying(false)
+      })
+    }
+  }
+
+  const handleRewind = () => {
+    if (!audioRef.current || !activeLesson) return
+    
+    const newTime = Math.max(0, audioRef.current.currentTime - 5)
+    audioRef.current.currentTime = newTime
+    setCurrentTime(newTime)
+    
+    // Clear existing timeout
+    if (seekIndicatorTimeoutRef.current) {
+      clearTimeout(seekIndicatorTimeoutRef.current)
+    }
+    
+    // Reset indicator to trigger animation again
+    setSeekIndicator(null)
+    setSeekIndicatorKey(prev => prev + 1)
+    
+    // Use setTimeout to set indicator after reset, ensuring animation restarts
+    setTimeout(() => {
+      setSeekIndicator('-5s')
+      seekIndicatorTimeoutRef.current = setTimeout(() => {
+        setSeekIndicator(null)
+      }, 1000)
+    }, 10)
+  }
+
+  const handleForward = () => {
+    if (!audioRef.current || !activeLesson) return
+    
+    const newTime = Math.min(duration, audioRef.current.currentTime + 5)
+    audioRef.current.currentTime = newTime
+    setCurrentTime(newTime)
+    
+    // Clear existing timeout
+    if (seekIndicatorTimeoutRef.current) {
+      clearTimeout(seekIndicatorTimeoutRef.current)
+    }
+    
+    // Reset indicator to trigger animation again
+    setSeekIndicator(null)
+    setSeekIndicatorKey(prev => prev + 1)
+    
+    // Use setTimeout to set indicator after reset, ensuring animation restarts
+    setTimeout(() => {
+      setSeekIndicator('+5s')
+      seekIndicatorTimeoutRef.current = setTimeout(() => {
+        setSeekIndicator(null)
+      }, 1000)
+    }, 10)
+  }
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (seekIndicatorTimeoutRef.current) {
+        clearTimeout(seekIndicatorTimeoutRef.current)
+      }
+    }
+  }, [])
+
   const englishText = useMemo(
-    () => activeLesson.english.split('/*/').map((s) => s.trim()).join('\n\n'),
-    [activeLesson.english]
+    () => activeLesson?.english.split('/*/').map((s) => s.trim()).join('\n\n') ?? '',
+    [activeLesson?.english]
   )
   const vietnameseText = useMemo(
-    () => activeLesson.vietnamese.split('/*/').map((s) => s.trim()).join('\n\n'),
-    [activeLesson.vietnamese]
+    () => activeLesson?.vietnamese.split('/*/').map((s) => s.trim()).join('\n\n') ?? '',
+    [activeLesson?.vietnamese]
   )
 
   const tokenize = (text: string) => {
@@ -382,43 +561,60 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
           <span className="label-mono" style={{ color: 'var(--gold)' }}>
             Current Track
           </span>
-          <p className="lesson-title">{activeLesson.content}</p>
+          <p className="lesson-title">{activeLesson?.content ?? 'No lesson selected'}</p>
           <div className="difficulty-indicator">
-            <div className="dot active" />
-            <div className="dot" />
-            <div className="dot" />
-            <span className="label-mono difficulty-label">Beginner</span>
+            <div className={`dot ${activeLesson?.difficulty && activeLesson.difficulty >= 1 ? 'active' : ''}`} />
+            <div className={`dot ${activeLesson?.difficulty && activeLesson.difficulty >= 2 ? 'active' : ''}`} />
+            <div className={`dot ${activeLesson?.difficulty && activeLesson.difficulty >= 3 ? 'active' : ''}`} />
+            <span className="label-mono difficulty-label">
+              {activeLesson?.difficulty === 1 ? 'Beginner' : 
+              activeLesson?.difficulty === 2 ? 'Intermediate' : 
+              activeLesson?.difficulty === 3 ? 'Advanced' : '--'}
+            </span>
           </div>
         </div>
       </section>
 
       <section className="center-player player-center-fixed">
-        <div className="orb-container">
+        <div className="orb-container" onClick={handlePlayPause} style={{ cursor: activeLesson ? 'pointer' : 'default' }}>
           <div className="progress-ring" />
           <div className="resin-orb">
-            <div className="play-icon" />
+            {isPlaying ? (
+              <div className="pause-icon">
+                <div className="pause-bar" />
+                <div className="pause-bar" />
+              </div>
+            ) : (
+              <div className="play-icon" />
+            )}
           </div>
         </div>
 
         <div className="controls">
-          <button className="btn-control">
+          <button className="btn-control" onClick={handleRewind} disabled={!activeLesson} title="Rewind 5s">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
+              <path d="M11.99 5V1l-5 5 5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
             </svg>
           </button>
-          <div className="wave-animation">
+          <div className="wave-animation" style={{ opacity: isPlaying ? 1 : 0.5 }}>
             <div className="bar" style={{ animationDelay: '0.1s' }} />
             <div className="bar" style={{ animationDelay: '0.3s' }} />
             <div className="bar" style={{ animationDelay: '0.2s' }} />
             <div className="bar" style={{ animationDelay: '0.4s' }} />
             <div className="bar" style={{ animationDelay: '0.1s' }} />
           </div>
-          <button className="btn-control">
+          <button className="btn-control" onClick={handleForward} disabled={!activeLesson} title="Forward 5s">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+              <path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z" />
             </svg>
           </button>
         </div>
+        
+        {seekIndicator && (
+          <div key={seekIndicatorKey} className="seek-indicator">
+            {seekIndicator}
+          </div>
+        )}
 
         <div className="audio-timeline">
           <div className="timeline-container">
@@ -426,12 +622,13 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
               type="range"
               className="timeline-slider"
               min="0"
-              max={duration}
+              max={duration || 0}
               value={currentTime}
               step="0.1"
               onChange={handleSeek}
+              disabled={!activeLesson || duration === 0}
             />
-            <div className="timeline-progress" style={{ width: `${(currentTime / duration) * 100}%` }} />
+            <div className="timeline-progress" style={{ width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }} />
           </div>
           <div className="timeline-labels">
             <span className="time-label">{formatTime(currentTime)}</span>
@@ -476,51 +673,68 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
             </div>
           </div>
 
-          {transcriptMode === 'hide' && (
-            <div className="data-stream" style={{ opacity: 0.3, textAlign: 'center', padding: '2rem 0' }}>
-              <p>Transcript is hidden</p>
+          {!activeLesson ? (
+            <div className="data-stream" style={{ opacity: 0.5, textAlign: 'center', padding: '3rem 0' }}>
+              <p style={{ marginBottom: '1rem' }}>No lesson selected</p>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                Please select a lesson from the Lessons tab
+              </p>
             </div>
-          )}
+          ) : (
+            <>
+              {transcriptMode === 'hide' && (
+                <div className="data-stream" style={{ opacity: 0.3, textAlign: 'center', padding: '2rem 0' }}>
+                  <p>Transcript is hidden</p>
+                </div>
+              )}
 
-          {transcriptMode === 'show' && (
-            <div className="data-stream transcript-selectable" onMouseUp={onTranscriptMouseUp}>
-              {englishTokens.map((t, idx) => {
-                const isPicked = picked ? idx >= picked.start && idx <= picked.end : false
-                return (
-                  <span
+              {transcriptMode === 'show' && (
+                <div className="data-stream transcript-selectable" onMouseUp={onTranscriptMouseUp}>
+                  {englishTokens.map((t, idx) => {
+                    const isPicked = picked ? idx >= picked.start && idx <= picked.end : false
+                    return (
+                      <span
+                        // eslint-disable-next-line react/no-array-index-key
+                        key={idx}
+                        data-token-idx={idx}
+                        className={isPicked ? 'picked-token' : undefined}
+                        onClick={() => onTokenClick(idx)}
+                      >
+                        {t}
+                      </span>
+                    )
+                  })}
+                </div>
+              )}
+
+              {transcriptMode === 'vietnamese' && (
+                <div className="data-stream transcript-selectable">
+                  {vietnameseTokens.map((t, idx) => (
                     // eslint-disable-next-line react/no-array-index-key
-                    key={idx}
-                    data-token-idx={idx}
-                    className={isPicked ? 'picked-token' : undefined}
-                    onClick={() => onTokenClick(idx)}
-                  >
-                    {t}
-                  </span>
-                )
-              })}
-            </div>
-          )}
+                    <span key={idx}>{t}</span>
+                  ))}
+                </div>
+              )}
 
-          {transcriptMode === 'vietnamese' && (
-            <div className="data-stream transcript-selectable">
-              {vietnameseTokens.map((t, idx) => (
-                // eslint-disable-next-line react/no-array-index-key
-                <span key={idx}>{t}</span>
-              ))}
-            </div>
-          )}
-
-          {transcriptMode === 'vocabulary' && (
-            <div style={{ marginTop: '1rem' }}>
-              <div className="vocab-chips">
-                {vocabDisplay.map((v) => (
-                  <div key={v.id} className="vocab-item">
-                    <span className="vocab-word">{v.en}</span>
-                    <span className="vocab-meaning">{v.vi}</span>
+              {transcriptMode === 'vocabulary' && (
+                <div style={{ marginTop: '1rem' }}>
+                  <div className="vocab-chips">
+                    {vocabDisplay.length > 0 ? (
+                      vocabDisplay.map((v) => (
+                        <div key={v.id} className="vocab-item">
+                          <span className="vocab-word">{v.en}</span>
+                          <span className="vocab-meaning">{v.vi}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p style={{ opacity: 0.5, textAlign: 'center', padding: '2rem 0' }}>
+                        No vocabulary for this lesson
+                      </p>
+                    )}
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
+              )}
+            </>
           )}
 
           {picked && transcriptMode === 'show' &&

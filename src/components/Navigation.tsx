@@ -4,7 +4,7 @@ import './Navigation.css'
 interface Props {
   activeScreen: Screen
   onChange: (screen: Screen) => void
-  activeLesson: Lesson
+  activeLesson: Lesson | null
 }
 
 const tabs: { id: Screen; label: string }[] = [
@@ -35,10 +35,19 @@ function Navigation({ activeScreen, onChange, activeLesson }: Props) {
 
       <div className="lesson-quick">
         <span className="label-mono">Now Focused</span>
-        <p className="lesson-name">{activeLesson.content}</p>
-        <p className="lesson-meta">
-          Uploaded by {activeLesson.uploadedBy} · {Math.round(activeLesson.audio.duration)}s
-        </p>
+        {activeLesson ? (
+          <>
+            <p className="lesson-name">{activeLesson.content}</p>
+            <p className="lesson-meta">
+              Uploaded by {activeLesson.uploadedBy} · {Math.round(activeLesson.audio.duration)}s
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="lesson-name">No lesson selected</p>
+            <p className="lesson-meta">Loading...</p>
+          </>
+        )}
       </div>
     </header>
   )

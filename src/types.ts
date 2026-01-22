@@ -13,6 +13,7 @@ export interface Lesson {
   english: string
   vietnamese: string
   audio: AudioInfo
+  difficulty: number,
   archived: boolean
   createdAt: string
 }
