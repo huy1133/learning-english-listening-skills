@@ -217,6 +217,52 @@ h1 {
   width: 100%;
 }
 
+.vocab-card-with-delete {
+  position: relative;
+}
+
+.vocab-delete-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+  z-index: 10;
+  padding: 4px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ff4444;
+}
+
+.vocab-delete-btn svg {
+  width: 18px;
+  height: 18px;
+  transition: all 0.2s ease;
+}
+
+.vocab-card-with-delete:hover .vocab-delete-btn {
+  opacity: 1;
+}
+
+.vocab-delete-btn:hover {
+  transform: scale(1.15);
+  color: #ff6666;
+  filter: drop-shadow(0 0 4px rgba(255, 0, 0, 0.5));
+}
+
+.vocab-delete-btn:hover svg {
+  transform: rotate(5deg);
+}
+
+.vocab-delete-btn:active {
+  transform: scale(0.95);
+}
+
 .vocab-card {
   display: flex;
   flex-direction: column;

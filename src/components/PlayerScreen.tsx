@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Lesson, VocabularyItem } from '../types'
+import { addVocabularyToFirebase } from '../services/vocabularyService'
 
 type TranscriptMode = 'hide' | 'show' | 'vietnamese' | 'vocabulary'
 
@@ -18,9 +19,12 @@ type Picked = {
 interface PlayerScreenProps {
   activeLesson: Lesson | null
   vocabulary: VocabularyItem[]
+  onVocabularyAdded?: () => Promise<void>
+  shouldAutoPlay?: boolean
+  onAutoPlayComplete?: () => void
 }
 
-export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenProps) {
+export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdded, shouldAutoPlay = false, onAutoPlayComplete }: PlayerScreenProps) {
   const vocabDisplay = activeLesson ? vocabulary.filter((v) => v.sourceLesson === activeLesson.id) : []
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
@@ -29,6 +33,7 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
   const [picked, setPicked] = useState<Picked | null>(null)
   const [translatedVi, setTranslatedVi] = useState<string>('')
   const [isTranslating, setIsTranslating] = useState(false)
+  const [isAddingVocabulary, setIsAddingVocabulary] = useState(false)
   const [seekIndicator, setSeekIndicator] = useState<string | null>(null)
   const [seekIndicatorKey, setSeekIndicatorKey] = useState(0)
   const translateAbortRef = useRef<AbortController | null>(null)
@@ -40,6 +45,12 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
     const mins = Math.floor(seconds / 60)
     const secs = Math.floor(seconds % 60)
     return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  // Remove trailing punctuation from picked text
+  const removeTrailingPunctuation = (text: string): string => {
+    // Remove common punctuation marks at the end: . , ! ? ; : - — – ) ] } " ' 
+    return text.replace(/[.,!?;:\-—–)\]}\"'"]+$/, '').trim()
   }
 
   // Initialize audio element
@@ -71,7 +82,7 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
     }
   }, [])
 
-  // Load and auto-play when lesson changes
+  // Load audio when lesson changes (but don't auto-play)
   useEffect(() => {
     if (!activeLesson || !audioRef.current) return
 
@@ -93,41 +104,11 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
       audioRef.current.src = audioUrl
       audioRef.current.load()
       setCurrentTime(0)
+      setIsPlaying(false)
       
       // Set duration from lesson data as fallback
       if (activeLesson.audio.duration) {
         setDuration(activeLesson.audio.duration)
-      }
-      
-      // Wait for audio to be ready before playing
-      const playAudio = () => {
-        if (audioRef.current) {
-          audioRef.current.play().catch((error) => {
-            // Ignore AbortError (interrupted play requests)
-            if (error.name !== 'AbortError') {
-              console.error('Error playing audio:', error)
-            }
-            setIsPlaying(false)
-          })
-        }
-      }
-      
-      // Try to play when audio is ready
-      if (audioRef.current.readyState >= 2) {
-        // Audio already loaded
-        playAudio()
-      } else {
-        // Wait for audio to load
-        const onCanPlay = () => {
-          playAudio()
-          audioRef.current?.removeEventListener('canplay', onCanPlay)
-        }
-        audioRef.current.addEventListener('canplay', onCanPlay)
-        
-        // Cleanup listener if component unmounts
-        return () => {
-          audioRef.current?.removeEventListener('canplay', onCanPlay)
-        }
       }
     } else {
       // Same lesson, just update duration if needed
@@ -135,7 +116,55 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
         setDuration(activeLesson.audio.duration)
       }
     }
-  }, [activeLesson?.id, activeLesson?.audio.url])
+  }, [activeLesson?.id, activeLesson?.audio.url, duration])
+
+  // Auto-play only when shouldAutoPlay is true and lesson is loaded
+  useEffect(() => {
+    if (!shouldAutoPlay || !activeLesson || !audioRef.current) return
+    
+    // Only auto-play if audio is ready
+    const playAudio = () => {
+      if (audioRef.current && !audioRef.current.paused) {
+        // Already playing, don't restart
+        if (onAutoPlayComplete) {
+          onAutoPlayComplete()
+        }
+        return
+      }
+      
+      if (audioRef.current) {
+        audioRef.current.play().catch((error) => {
+          // Ignore AbortError (interrupted play requests)
+          if (error.name !== 'AbortError') {
+            console.error('Error playing audio:', error)
+          }
+          setIsPlaying(false)
+        })
+        // Reset shouldAutoPlay after starting to play
+        if (onAutoPlayComplete) {
+          onAutoPlayComplete()
+        }
+      }
+    }
+    
+    // Try to play when audio is ready
+    if (audioRef.current.readyState >= 2) {
+      // Audio already loaded
+      playAudio()
+    } else {
+      // Wait for audio to load
+      const onCanPlay = () => {
+        playAudio()
+        audioRef.current?.removeEventListener('canplay', onCanPlay)
+      }
+      audioRef.current.addEventListener('canplay', onCanPlay)
+      
+      // Cleanup listener
+      return () => {
+        audioRef.current?.removeEventListener('canplay', onCanPlay)
+      }
+    }
+  }, [shouldAutoPlay, activeLesson?.id, activeLesson?.audio.url, onAutoPlayComplete])
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = parseFloat(e.target.value)
@@ -236,6 +265,17 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
 
   const englishTokens = useMemo(() => tokenize(englishText), [englishText])
   const vietnameseTokens = useMemo(() => tokenize(vietnameseText), [vietnameseText])
+
+  // Check if picked word is already in vocabulary
+  const isPickedWordInVocabulary = useMemo(() => {
+    if (!picked || !activeLesson) return false
+    const pickedText = picked.text.trim().toLowerCase()
+    return vocabulary.some(
+      (v) =>
+        v.en.trim().toLowerCase() === pickedText &&
+        v.sourceLesson === activeLesson.id
+    )
+  }, [picked, vocabulary, activeLesson])
 
   const closePicked = () => {
     setPicked(null)
@@ -452,7 +492,7 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
 
     const a = Math.min(startIdx, endIdx)
     const b = Math.max(startIdx, endIdx)
-    const joined = englishTokens.slice(a, b + 1).join('').trim()
+    const joined = removeTrailingPunctuation(englishTokens.slice(a, b + 1).join('').trim())
     if (!joined) return
 
     const range = sel.rangeCount > 0 ? sel.getRangeAt(0) : null
@@ -482,7 +522,7 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
   const onTokenClick = (idx: number) => {
     if (transcriptMode !== 'show') return
     const token = englishTokens[idx] ?? ''
-    const text = token.trim()
+    const text = removeTrailingPunctuation(token.trim())
     if (!text) return
     // Put popover near the clicked token
     const el = document.querySelector(`[data-token-idx="${idx}"]`)
@@ -546,6 +586,34 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
 
     return () => controller.abort()
   }, [picked, transcriptMode])
+
+  const handleAddToVocabulary = async () => {
+    if (!picked || !activeLesson || !translatedVi.trim() || isPickedWordInVocabulary) {
+      return
+    }
+    
+    setIsAddingVocabulary(true)
+    try {
+      await addVocabularyToFirebase({
+        id: crypto.randomUUID(),
+        en: picked.text.trim(),
+        vi: translatedVi.trim(),
+        sourceLesson: activeLesson.id,
+      })
+      
+      // Reload vocabulary if callback provided
+      if (onVocabularyAdded) {
+        await onVocabularyAdded()
+      }
+      
+      // Don't close popup, just update state - the button will change to "Added"
+    } catch (error) {
+      console.error('Error adding vocabulary:', error)
+      alert('Failed to add vocabulary. Please try again.')
+    } finally {
+      setIsAddingVocabulary(false)
+    }
+  }
 
   return (
     <main className="resin-stage player-stage">
@@ -761,11 +829,19 @@ export default function PlayerScreen({ activeLesson, vocabulary }: PlayerScreenP
                   <span className="label-mono">VI</span>
                   <div className="translate-result-text">{isTranslating ? 'Translating…' : translatedVi}</div>
                 </div>
-                <div className="translate-actions">
-                  <button className="mode-btn" disabled title="UI only (coming soon)">
-                    Add to vocabulary
-                  </button>
-                </div>
+                 <div className="translate-actions">
+                   <button 
+                     className={`mode-btn ${isPickedWordInVocabulary ? 'active' : ''}`}
+                     onClick={handleAddToVocabulary}
+                     disabled={isAddingVocabulary || !translatedVi.trim() || isPickedWordInVocabulary}
+                   >
+                     {isAddingVocabulary 
+                       ? 'Adding...' 
+                       : isPickedWordInVocabulary 
+                         ? 'Added' 
+                         : 'Add to vocabulary'}
+                   </button>
+                 </div>
               </div>,
               document.body
             )}

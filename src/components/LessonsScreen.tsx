@@ -1,18 +1,23 @@
 import { useState } from 'react'
-import { useLessons } from '../hooks/useLessons'
+import type { Lesson } from '../types'
 
 interface LessonsScreenProps {
   activeLessonId: string
   onSelectLesson: (id: string) => void
   onAddLessonClick: () => void
+  lessons: Lesson[]
+  loading: boolean
+  error: Error | null
 }
 
 export default function LessonsScreen({
   activeLessonId,
   onSelectLesson,
   onAddLessonClick,
+  lessons,
+  loading,
+  error,
 }: LessonsScreenProps) {
-  const { lessons, loading, error } = useLessons()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const pageSize = 10

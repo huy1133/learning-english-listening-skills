@@ -58,7 +58,6 @@ export default function AddLessonModal({ isOpen, onClose, onImportSuccess }: Add
         await onImportSuccess()
       }
       
-      alert('Lesson imported successfully')
       // Reset form on success
       setJsonFile(null)
       setAudioFile(null)
