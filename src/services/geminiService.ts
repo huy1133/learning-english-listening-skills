@@ -32,10 +32,11 @@ function extractRetryDelay(errorData: any): number {
 async function makeApiCall(prompt: string): Promise<any> {
   const url = getApiUrl()
 
-  const response = await fetch(`${url}?key=${GEMINI_API_KEY}`, {
+  const response = await fetch(`${url}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-Goog-Api-Key': GEMINI_API_KEY
     },
     body: JSON.stringify({
       contents: [{
