@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Lesson, VocabularyItem } from '../types'
 import { addVocabularyToFirebase } from '../services/vocabularyService'
+import { generateQuestions, evaluateAnswer, type QAQuestion, type QAEvaluation } from '../services/geminiService'
 
-type TranscriptMode = 'hide' | 'show' | 'vietnamese' | 'vocabulary'
+type TranscriptMode = 'hide' | 'show' | 'vietnamese' | 'vocabulary' | 'review' | 'qa'
 
 type Picked = {
   text: string
@@ -26,20 +27,241 @@ interface PlayerScreenProps {
 
 export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdded, shouldAutoPlay = false, onAutoPlayComplete }: PlayerScreenProps) {
   const vocabDisplay = activeLesson ? vocabulary.filter((v) => v.sourceLesson === activeLesson.id) : []
+
+  // Shuffle vocabulary for review
+  const shuffleVocabulary = (words: VocabularyItem[]): VocabularyItem[] => {
+    const shuffled = [...words]
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+    }
+    return shuffled
+  }
+
+  // Start review session
+  const startReview = () => {
+    if (vocabDisplay.length === 0) {
+      alert('Không có từ vựng nào để kiểm tra cho bài học này.')
+      return
+    }
+    const shuffled = shuffleVocabulary(vocabDisplay)
+    setReviewWords(shuffled)
+    setCurrentReviewIndex(0)
+    setReviewInput('')
+    setReviewFeedback(null)
+    setIsReviewOpen(true)
+  }
+
+  // Handle review answer submission
+  const handleReviewSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault()
+    if (!reviewInput.trim() || currentReviewIndex >= reviewWords.length) return
+
+    const currentWord = reviewWords[currentReviewIndex]
+    const userAnswer = reviewInput.trim().toLowerCase()
+    const correctAnswer = currentWord.en.trim().toLowerCase()
+
+    // Check if answer is correct (allow for minor variations)
+    const isCorrect = userAnswer === correctAnswer || 
+                     userAnswer === correctAnswer.replace(/[.,!?;:\-—–)\]}\"'"]+$/, '').trim()
+
+    if (isCorrect) {
+      setReviewFeedback('correct')
+      // Move to next word after a short delay
+      setTimeout(() => {
+        if (currentReviewIndex + 1 < reviewWords.length) {
+          setCurrentReviewIndex(currentReviewIndex + 1)
+          setReviewInput('')
+          setReviewFeedback(null)
+        } else {
+          // All words completed
+          setIsReviewOpen(false)
+          setReviewFeedback(null)
+          alert('Chúc mừng! Bạn đã hoàn thành tất cả các từ vựng!')
+        }
+      }, 1000)
+    } else {
+      setReviewFeedback('incorrect')
+      // Show correct answer and allow retry
+      setTimeout(() => {
+        setReviewInput('')
+        setReviewFeedback(null)
+      }, 2000)
+    }
+  }
+
+  // Close review modal
+  const closeReview = () => {
+    setIsReviewOpen(false)
+    setReviewInput('')
+    setReviewFeedback(null)
+    setCurrentReviewIndex(0)
+    setReviewWords([])
+  }
+
+  // Get session storage key for QA questions
+  const getQAStorageKey = (lessonId: string) => `qa_questions_${lessonId}`
+
+  // Load QA questions from sessionStorage
+  const loadQAFromStorage = (lessonId: string): QAQuestion[] | null => {
+    try {
+      const stored = sessionStorage.getItem(getQAStorageKey(lessonId))
+      if (stored) {
+        return JSON.parse(stored)
+      }
+    } catch (error) {
+      console.error('Error loading QA from storage:', error)
+    }
+    return null
+  }
+
+  // Save QA questions to sessionStorage
+  const saveQAToStorage = (lessonId: string, questions: QAQuestion[]) => {
+    try {
+      sessionStorage.setItem(getQAStorageKey(lessonId), JSON.stringify(questions))
+    } catch (error) {
+      console.error('Error saving QA to storage:', error)
+    }
+  }
+
+  // Start QA session
+  const startQA = async (forceRegenerate: boolean = false) => {
+    if (!activeLesson || !englishText.trim()) {
+      setQaError('No lesson or transcript available')
+      return
+    }
+
+    setIsQAOpen(true)
+    setQaError(null)
+    setQaAnswers([])
+    setQaEvaluations([])
+    setCurrentQaIndex(0)
+
+    // Check if questions exist in sessionStorage
+    if (!forceRegenerate) {
+      const storedQuestions = loadQAFromStorage(activeLesson.id)
+      if (storedQuestions && storedQuestions.length > 0) {
+        setQaQuestions(storedQuestions)
+        setQaAnswers(new Array(storedQuestions.length).fill(''))
+        setQaEvaluations(new Array(storedQuestions.length))
+        return
+      }
+    }
+
+    // Generate new questions
+    setIsGeneratingQuestions(true)
+    setQaQuestions([])
+
+    try {
+      const questions = await generateQuestions(englishText, 4)
+      setQaQuestions(questions)
+      setQaAnswers(new Array(questions.length).fill(''))
+      setQaEvaluations(new Array(questions.length))
+      // Save to sessionStorage
+      saveQAToStorage(activeLesson.id, questions)
+    } catch (error) {
+      console.error('Error generating questions:', error)
+      setQaError(error instanceof Error ? error.message : 'Failed to generate questions. Please check your API key.')
+    } finally {
+      setIsGeneratingQuestions(false)
+    }
+  }
+
+  // Generate questions again
+  const regenerateQA = async () => {
+    await startQA(true)
+  }
+
+  // Close QA modal
+  const closeQA = () => {
+    setIsQAOpen(false)
+    setQaQuestions([])
+    setQaAnswers([])
+    setQaEvaluations([])
+    setCurrentQaIndex(0)
+    setQaError(null)
+  }
+
+  // Handle QA answer submission
+  const handleQASubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+    if (!activeLesson || currentQaIndex >= qaQuestions.length) return
+
+    const currentAnswer = qaAnswers[currentQaIndex]?.trim() || ''
+    if (!currentAnswer) {
+      alert('Please enter an answer')
+      return
+    }
+
+    setIsEvaluatingAnswer(true)
+    setQaError(null)
+
+    try {
+      const evaluation = await evaluateAnswer(
+        qaQuestions[currentQaIndex].question,
+        currentAnswer,
+        englishText
+      )
+
+      const newEvaluations = [...qaEvaluations]
+      newEvaluations[currentQaIndex] = evaluation
+      setQaEvaluations(newEvaluations)
+    } catch (error) {
+      console.error('Error evaluating answer:', error)
+      setQaError(error instanceof Error ? error.message : 'Failed to evaluate answer')
+    } finally {
+      setIsEvaluatingAnswer(false)
+    }
+  }
+
+  // Reset QA session
+  const resetQA = () => {
+    if (activeLesson) {
+      // Clear from sessionStorage
+      try {
+        sessionStorage.removeItem(getQAStorageKey(activeLesson.id))
+      } catch (error) {
+        console.error('Error clearing QA from storage:', error)
+      }
+    }
+    setQaQuestions([])
+    setQaAnswers([])
+    setQaEvaluations([])
+    setCurrentQaIndex(0)
+    setQaError(null)
+    setIsGeneratingQuestions(false)
+    setIsEvaluatingAnswer(false)
+  }
+
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [transcriptMode, setTranscriptMode] = useState<TranscriptMode>('hide')
   const [picked, setPicked] = useState<Picked | null>(null)
   const [translatedVi, setTranslatedVi] = useState<string>('')
-  const [isTranslating, setIsTranslating] = useState(false)
   const [isAddingVocabulary, setIsAddingVocabulary] = useState(false)
   const [seekIndicator, setSeekIndicator] = useState<string | null>(null)
   const [seekIndicatorKey, setSeekIndicatorKey] = useState(0)
+  const [isReviewOpen, setIsReviewOpen] = useState(false)
+  const [reviewWords, setReviewWords] = useState<VocabularyItem[]>([])
+  const [currentReviewIndex, setCurrentReviewIndex] = useState(0)
+  const [reviewInput, setReviewInput] = useState('')
+  const [reviewFeedback, setReviewFeedback] = useState<'correct' | 'incorrect' | null>(null)
+  // QA state
+  const [isQAOpen, setIsQAOpen] = useState(false)
+  const [qaQuestions, setQaQuestions] = useState<QAQuestion[]>([])
+  const [currentQaIndex, setCurrentQaIndex] = useState(0)
+  const [qaAnswers, setQaAnswers] = useState<string[]>([])
+  const [qaEvaluations, setQaEvaluations] = useState<QAEvaluation[]>([])
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false)
+  const [isEvaluatingAnswer, setIsEvaluatingAnswer] = useState(false)
+  const [qaError, setQaError] = useState<string | null>(null)
   const translateAbortRef = useRef<AbortController | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const previousLessonIdRef = useRef<string | null>(null)
   const seekIndicatorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reviewInputRef = useRef<HTMLInputElement | null>(null)
+  const qaInputRef = useRef<HTMLTextAreaElement | null>(null)
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -280,7 +502,6 @@ export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdd
   const closePicked = () => {
     setPicked(null)
     setTranslatedVi('')
-    setIsTranslating(false)
     translateAbortRef.current?.abort()
     translateAbortRef.current = null
   }
@@ -562,7 +783,6 @@ export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdd
     const controller = new AbortController()
     translateAbortRef.current = controller
 
-    setIsTranslating(true)
     setTranslatedVi('')
 
     const q = picked.text.trim()
@@ -580,12 +800,43 @@ export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdd
       .catch(() => {
         setTranslatedVi('Không dịch được (offline hoặc bị chặn).')
       })
-      .finally(() => {
-        setIsTranslating(false)
-      })
 
     return () => controller.abort()
   }, [picked, transcriptMode])
+
+  // Auto-focus review input when modal opens or word changes
+  useEffect(() => {
+    if (isReviewOpen && reviewWords.length > 0 && currentReviewIndex < reviewWords.length && reviewFeedback === null) {
+      // Use requestAnimationFrame to ensure DOM is ready
+      const focusInput = () => {
+        if (reviewInputRef.current) {
+          reviewInputRef.current.focus()
+        }
+      }
+      // Try multiple times to ensure focus works
+      requestAnimationFrame(() => {
+        focusInput()
+        setTimeout(focusInput, 50)
+        setTimeout(focusInput, 150)
+      })
+    }
+  }, [isReviewOpen, currentReviewIndex, reviewWords.length, reviewFeedback])
+
+  // Auto-focus QA input when modal opens or question changes
+  useEffect(() => {
+    if (isQAOpen && qaQuestions.length > 0 && currentQaIndex < qaQuestions.length && !qaEvaluations[currentQaIndex]) {
+      const focusInput = () => {
+        if (qaInputRef.current) {
+          qaInputRef.current.focus()
+        }
+      }
+      requestAnimationFrame(() => {
+        focusInput()
+        setTimeout(focusInput, 50)
+        setTimeout(focusInput, 150)
+      })
+    }
+  }, [isQAOpen, currentQaIndex, qaQuestions.length, qaEvaluations])
 
   const handleAddToVocabulary = async () => {
     if (!picked || !activeLesson || !translatedVi.trim() || isPickedWordInVocabulary) {
@@ -738,6 +989,28 @@ export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdd
               >
                 Vocab
               </button>
+              <button
+                className={`mode-btn ${transcriptMode === 'review' ? 'active' : ''}`}
+                onClick={() => {
+                  setTranscriptMode('review')
+                  startReview()
+                }}
+                title="Kiểm tra bài cũ"
+                disabled={vocabDisplay.length === 0}
+              >
+                Review
+              </button>
+              <button
+                className={`mode-btn ${transcriptMode === 'qa' ? 'active' : ''}`}
+                onClick={() => {
+                  setTranscriptMode('qa')
+                  startQA(false)
+                }}
+                title="Question & Answer"
+                disabled={!activeLesson || !englishText.trim()}
+              >
+                QA
+              </button>
             </div>
           </div>
 
@@ -802,6 +1075,26 @@ export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdd
                   </div>
                 </div>
               )}
+
+              {transcriptMode === 'review' && (
+                <div className="data-stream" style={{ opacity: 0.5, textAlign: 'center', padding: '2rem 0' }}>
+                  <p>Review mode</p>
+                  <p style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>
+                    {vocabDisplay.length > 0 
+                      ? `There are ${vocabDisplay.length} words to review. Click the Review button to start.`
+                      : 'There are no words to review for this lesson.'}
+                  </p>
+                </div>
+              )}
+
+              {transcriptMode === 'qa' && (
+                <div className="data-stream" style={{ opacity: 0.5, textAlign: 'center', padding: '2rem 0' }}>
+                  <p>Question & Answer Mode</p>
+                  <p style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>
+                    Click the QA button to start the question session
+                  </p>
+                </div>
+              )}
             </>
           )}
 
@@ -818,7 +1111,8 @@ export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdd
                   </button>
                 </div>
                 <div className="translate-picked-row">
-                  <div className="translate-picked-text">{picked.text}</div>
+                  <input className="input" type="text" value={picked.text} onChange={(e) => setPicked({ ...picked, text: e.target.value })} />
+                  {/*<div className="translate-picked-text">{picked.text}</div>*/}
                   <button className="icon-btn" onClick={playPicked} title="Play pronunciation">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                       <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4.06v8.12A4.5 4.5 0 0016.5 12zm-2.5-8v2.05a6.5 6.5 0 010 11.9V20a8.5 8.5 0 000-16z" />
@@ -827,7 +1121,8 @@ export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdd
                 </div>
                 <div className="translate-result">
                   <span className="label-mono">VI</span>
-                  <div className="translate-result-text">{isTranslating ? 'Translating…' : translatedVi}</div>
+                  <input className="input" type="text" value={translatedVi} onChange={(e) => setTranslatedVi(e.target.value)} />
+                  {/*<div className="translate-result-text">{isTranslating ? 'Translating…' : translatedVi}</div>*/}
                 </div>
                  <div className="translate-actions">
                    <button 
@@ -842,6 +1137,379 @@ export default function PlayerScreen({ activeLesson, vocabulary, onVocabularyAdd
                          : 'Add to vocabulary'}
                    </button>
                  </div>
+              </div>,
+              document.body
+            )}
+
+          {/* Review Modal */}
+          {isReviewOpen && reviewWords.length > 0 && currentReviewIndex < reviewWords.length &&
+            createPortal(
+              <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeReview}>
+                <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+                  <div className="modal-header">
+                    <span className="label-mono">review vocabulary</span>
+                    <button className="btn-icon" onClick={closeReview} aria-label="Close">
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="modal-body">
+                    <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                      <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                        Word {currentReviewIndex + 1} / {reviewWords.length}
+                      </p>
+                      <div style={{ 
+                        width: '100%', 
+                        height: '4px', 
+                        backgroundColor: 'var(--bg-secondary)', 
+                        borderRadius: '2px',
+                        overflow: 'hidden',
+                        marginBottom: '1rem'
+                      }}>
+                        <div style={{ 
+                          width: `${((currentReviewIndex + 1) / reviewWords.length) * 100}%`, 
+                          height: '100%', 
+                          backgroundColor: 'var(--accent)',
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+
+                    <div style={{ 
+                      textAlign: 'center', 
+                      padding: '2rem',
+                      backgroundColor: 'var(--bg-secondary)',
+                      borderRadius: '8px',
+                      marginBottom: '1.5rem'
+                    }}>
+                      <p style={{ 
+                        fontSize: '1.5rem', 
+                        fontWeight: 600,
+                        color: 'var(--gold)',
+                        marginBottom: '0.5rem'
+                      }}>
+                        {reviewWords[currentReviewIndex].vi}
+                      </p>
+                      <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                        Enter the English word corresponding to the word above
+                      </p>
+                    </div>
+
+                    <form onSubmit={handleReviewSubmit}>
+                      <label className="file-field">
+                        <span className="label-mono">English</span>
+                        <input
+                          ref={reviewInputRef}
+                          className="input"
+                          type="text"
+                          value={reviewInput}
+                          onChange={(e) => {
+                            setReviewInput(e.target.value)
+                            setReviewFeedback(null)
+                          }}
+                          placeholder="Enter the English word..."
+                          autoFocus
+                          disabled={reviewFeedback !== null}
+                        />
+                      </label>
+
+                      {reviewFeedback === 'correct' && (
+                        <div style={{ 
+                          padding: '0.75rem', 
+                          backgroundColor: 'rgba(76, 175, 80, 0.1)', 
+                          border: '1px solid rgba(76, 175, 80, 0.3)',
+                          borderRadius: '4px',
+                          marginTop: '1rem',
+                          textAlign: 'center',
+                          color: '#4caf50'
+                        }}>
+                          ✓ Correct! Move to the next word...
+                        </div>
+                      )}
+
+                      {reviewFeedback === 'incorrect' && (
+                        <div style={{ 
+                          padding: '0.75rem', 
+                          backgroundColor: 'rgba(244, 67, 54, 0.1)', 
+                          border: '1px solid rgba(244, 67, 54, 0.3)',
+                          borderRadius: '4px',
+                          marginTop: '1rem',
+                          textAlign: 'center'
+                        }}>
+                          <p style={{ color: '#f44336', marginBottom: '0.5rem' }}>✗ Wrong!</p>
+                          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                            Correct answer: <strong>{reviewWords[currentReviewIndex].en}</strong>
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="modal-actions" style={{ marginTop: '1.5rem' }}>
+                        <button 
+                          type="button"
+                          className="btn-secondary" 
+                          onClick={closeReview}
+                        >
+                          Stop
+                        </button>
+                        <button 
+                          type="submit"
+                          className="btn-primary" 
+                          disabled={!reviewInput.trim() || reviewFeedback !== null}
+                        >
+                          {reviewFeedback === 'correct' ? 'Continue...' : 
+                           reviewFeedback === 'incorrect' ? 'Try again...' : 
+                           'Review'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
+
+          {/* QA Modal */}
+          {isQAOpen &&
+            createPortal(
+              <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeQA}>
+                <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+                  <div className="modal-header">
+                    <span className="label-mono">Question & Answer</span>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      {qaQuestions.length > 0 && !isGeneratingQuestions && (
+                        <button 
+                          className="btn-secondary btn-small" 
+                          onClick={() => regenerateQA()}
+                          style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                          title="Generate new questions"
+                        >
+                          Generate Again
+                        </button>
+                      )}
+                      <button className="btn-icon" onClick={closeQA} aria-label="Close">
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="modal-body">
+                    {isGeneratingQuestions && (
+                      <div style={{ textAlign: 'center', padding: '2rem 0' }}>
+                        <p>Generating questions from conversation...</p>
+                        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                          This may take a few seconds
+                        </p>
+                      </div>
+                    )}
+
+                    {qaError && (
+                      <div style={{ 
+                        padding: '1rem', 
+                        backgroundColor: 'rgba(244, 67, 54, 0.1)', 
+                        border: '1px solid rgba(244, 67, 54, 0.3)',
+                        borderRadius: '4px',
+                        marginBottom: '1rem',
+                        color: '#f44336'
+                      }}>
+                        <p style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Error</p>
+                        <p style={{ fontSize: '0.875rem' }}>{qaError}</p>
+                        <button 
+                          className="btn-secondary btn-small" 
+                          onClick={resetQA}
+                          style={{ marginTop: '0.5rem' }}
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    )}
+
+                    {!isGeneratingQuestions && qaQuestions.length > 0 && (
+                      <div>
+                        {/* Progress indicator */}
+                        <div style={{ marginBottom: '1.5rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                            <span className="label-mono" style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                              Question {currentQaIndex + 1} / {qaQuestions.length}
+                            </span>
+                            {qaEvaluations[currentQaIndex] && (
+                              <span className="label-mono" style={{ color: 'var(--accent)' }}>
+                                Score: {qaEvaluations[currentQaIndex].score}/10
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ 
+                            width: '100%', 
+                            height: '4px', 
+                            backgroundColor: 'var(--bg-secondary)', 
+                            borderRadius: '2px',
+                            overflow: 'hidden',
+                            marginBottom: '1rem'
+                          }}>
+                            <div style={{ 
+                              width: `${((currentQaIndex + 1) / qaQuestions.length) * 100}%`, 
+                              height: '100%', 
+                              backgroundColor: 'var(--accent)',
+                              transition: 'width 0.3s ease'
+                            }} />
+                          </div>
+                        </div>
+
+                        {/* Current Question */}
+                        <div style={{ 
+                          padding: '1.5rem',
+                          backgroundColor: 'var(--bg-secondary)',
+                          borderRadius: '8px',
+                          marginBottom: '1.5rem'
+                        }}>
+                          <p style={{ 
+                            fontSize: '1.125rem', 
+                            fontWeight: 600,
+                            marginBottom: '1rem',
+                            color: 'var(--gold)'
+                          }}>
+                            {qaQuestions[currentQaIndex].question}
+                          </p>
+
+                          {/* Answer Input */}
+                          {!qaEvaluations[currentQaIndex] ? (
+                            <form onSubmit={handleQASubmit}>
+                              <label className="file-field">
+                                <span className="label-mono">Your Answer</span>
+                                <textarea
+                                  ref={qaInputRef}
+                                  className="input"
+                                  rows={4}
+                                  value={qaAnswers[currentQaIndex] || ''}
+                                  onChange={(e) => {
+                                    const newAnswers = [...qaAnswers]
+                                    newAnswers[currentQaIndex] = e.target.value
+                                    setQaAnswers(newAnswers)
+                                  }}
+                                  placeholder="Type your answer in English..."
+                                  disabled={isEvaluatingAnswer}
+                                  style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                                />
+                              </label>
+                              <div className="modal-actions" style={{ marginTop: '1.5rem' }}>
+                                <button 
+                                  type="button"
+                                  className="btn-secondary" 
+                                  onClick={closeQA}
+                                >
+                                  Stop
+                                </button>
+                                <button 
+                                  type="submit"
+                                  className="btn-primary"
+                                  disabled={!qaAnswers[currentQaIndex]?.trim() || isEvaluatingAnswer}
+                                >
+                                  {isEvaluatingAnswer ? 'Evaluating...' : 'Submit Answer'}
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            /* Evaluation Results */
+                            <div>
+                              <div style={{ marginBottom: '1rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                                  <p style={{ 
+                                    fontSize: '1.5rem', 
+                                    fontWeight: 700,
+                                    color: qaEvaluations[currentQaIndex].score >= 7 
+                                      ? '#4caf50' 
+                                      : qaEvaluations[currentQaIndex].score >= 5
+                                      ? '#ffc107'
+                                      : '#f44336'
+                                  }}>
+                                    Score: {qaEvaluations[currentQaIndex].score}/10
+                                  </p>
+                                </div>
+
+                                {qaEvaluations[currentQaIndex].correctedAnswer && (
+                                  <div style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
+                                    <span className="label-mono" style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.5rem' }}>Suggested Correction</span>
+                                    <p style={{ fontSize: '0.875rem', fontStyle: 'italic', color: 'var(--text-secondary)' }}>
+                                      {qaEvaluations[currentQaIndex].correctedAnswer}
+                                    </p>
+                                  </div>
+                                )}
+
+                                <div style={{ marginTop: qaEvaluations[currentQaIndex].correctedAnswer ? '1rem' : '0.75rem', paddingTop: qaEvaluations[currentQaIndex].correctedAnswer ? '1rem' : '0', borderTop: qaEvaluations[currentQaIndex].correctedAnswer ? '1px solid var(--bg-secondary)' : 'none' }}>
+                                  <span className="label-mono" style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.5rem' }}>Feedback</span>
+                                  <p style={{ fontSize: '0.875rem', lineHeight: '1.5' }}>
+                                    {qaEvaluations[currentQaIndex].feedback}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="modal-actions" style={{ marginTop: '1.5rem' }}>
+                                <button 
+                                  type="button"
+                                  className="btn-secondary" 
+                                  onClick={closeQA}
+                                >
+                                  Stop
+                                </button>
+                                {currentQaIndex < qaQuestions.length - 1 ? (
+                                  <button
+                                    className="btn-primary"
+                                    onClick={() => {
+                                      setCurrentQaIndex(currentQaIndex + 1)
+                                      qaInputRef.current?.focus()
+                                    }}
+                                  >
+                                    Next Question
+                                  </button>
+                                ) : (
+                                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button
+                                      className="btn-secondary"
+                                      onClick={() => {
+                                        const avgScore = qaEvaluations.reduce((sum, e) => sum + e.score, 0) / qaEvaluations.length
+                                        alert(`Quiz completed! Average score: ${avgScore.toFixed(1)}/10`)
+                                      }}
+                                    >
+                                      View Summary
+                                    </button>
+                                    <button
+                                      className="btn-primary"
+                                      onClick={resetQA}
+                                    >
+                                      Start Over
+                                    </button>
+                                  </div>
+                                )}
+                                {currentQaIndex > 0 && (
+                                  <button
+                                    className="btn-secondary"
+                                    onClick={() => {
+                                      setCurrentQaIndex(currentQaIndex - 1)
+                                      qaInputRef.current?.focus()
+                                    }}
+                                  >
+                                    Previous
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {!isGeneratingQuestions && qaQuestions.length === 0 && !qaError && (
+                      <div style={{ textAlign: 'center', padding: '2rem 0' }}>
+                        <p>Question & Answer Mode</p>
+                        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem', marginBottom: '1rem' }}>
+                          AI will generate questions based on the conversation transcript
+                        </p>
+                        <button className="btn-primary" onClick={() => startQA()}>
+                          Generate Questions
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>,
               document.body
             )}
